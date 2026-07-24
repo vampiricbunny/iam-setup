@@ -1,12 +1,9 @@
 # iam-setup
 
-
 # Advanced Identity and Access Management in Virtualized Infrastructure: A Proxmox-Based Implementation and Security Analysis
-
 
 **Organization**: [Redacted]  
 **Project Duration**: Q3 2025 - Q1 2026  
-
 
 ---
 
@@ -50,10 +47,9 @@ The CTO mandated the following requirements for the IAM overhaul:
 ## 2. Architecture Design
 
 ### 2.1 Proxmox IAM Component Architecture
- 
+
 ---
 ![alt text](pics/1.png)
-
 
 ### 2.2 Realm Configuration and Trust Establishment
 
@@ -75,8 +71,8 @@ cache_credentials = false
 krb5_store_password_if_offline = false
 ```
 
-
 # Critical security setting - prevents offline credential caching
+
 # Required by requirement IAM-004 for complete audit coverage
 
 The realm trust was established with specific security constraints:
@@ -92,31 +88,41 @@ The realm trust was established with specific security constraints:
 
 Before implementation, I conducted a detailed analysis of actual administrative tasks to determine appropriate privilege boundaries. I shadowed 12 administrators for two weeks, documenting every command executed. The findings were surprising:
 
-  - Administrative Task Distribution Analysis
+- Administrative Task Distribution Analysis
 
- 
 ![alt text](pics/2.png)
-
 
 Role: VM Operator
 bash
 
 # Created via pveum command line
+
 pveum role add VM-Operator -privs "VM.Audit VM.PowerMgmt VM.Console VM.Config.CDROM VM.Monitor"
 
-# Permission rationale:
+# Permission rationale
+
 # VM.Audit - Required for viewing VM status
+
 # VM.PowerMgmt - Start/stop/restart operations only
+
 # VM.Console - VNC/SPICE console access for troubleshooting
+
 # VM.Config.CDROM - Mount installation media
+
 # VM.Monitor - QEMU monitor for emergency commands
 
-# Explicitly denied:
+# Explicitly denied
+
 # VM.Config.Disk - Cannot resize or attach storage
+
 # VM.Config.Network - Cannot modify network settings
+
 # VM.Config.Memory - Cannot change RAM allocation
+
 # VM.Config.CPU - Cannot modify CPU settings
+
 # VM.Clone - Cannot duplicate VMs
+
 # VM.Snapshot - Cannot create/rollback snapshots
 
 Role: Storage Administrator
@@ -188,12 +194,12 @@ if __name__ == '__main__':
 ```
 
 ### 3.3 Permission Matrix Development
+
   Proxmox IAM Permission Matrix
 
-  
 ![alt text](pics/3.png)
 
-4. Multi-Factor Authentication Implementation
+1. Multi-Factor Authentication Implementation
 4.1 TOTP Integration with FreeIPA
 
 Requirement IAM-003 mandated 100% MFA coverage. I implemented this through FreeIPA's OTP (One-Time Password) functionality combined with SSSD's authentication indicator support.
@@ -202,13 +208,12 @@ MFA Authentication Flow Diagram
 
 ![alt text](pics/4.png)
 
-
-
 The Proxmox PAM configuration required modification to enforce MFA:
 bash
 
 # /etc/pam.d/proxmox on all nodes
-#%PAM-1.0
+
+# %PAM-1.0
 
 auth [success=2 default=ignore] pam_sss.so forward_pass
 auth [success=1 default=ignore] pam_google_authenticator.so nullok
@@ -226,15 +231,18 @@ API access required a different approach since TOTP couldn't be used programmati
 hcl
 
 # Vault policy for Proxmox API access
+
 path "proxmox/creds/*" {
   capabilities = ["read"]
   
-  # Enforce TTL limits
+# Enforce TTL limits
+
   allowed_parameters = {
     "ttl" = ["1h", "2h", "4h"]
   }
   
-  # Deny requests without valid MFA
+# Deny requests without valid MFA
+
   condition "mfa" {
     methods = ["totp"]
     # Require MFA validation within last 15 minutes
@@ -243,6 +251,7 @@ path "proxmox/creds/*" {
 }
 
 # Proxmox secrets engine configuration
+
 path "proxmox/config" {
   capabilities = ["create", "update", "read"]
   denied_parameters = {
@@ -263,6 +272,7 @@ The workflow required users to:
 This eliminated long-lived API credentials entirely.
 
 ### 5. Privilege Escalation Attack Simulation
+
 5.1 Red Team Exercise Design
 
 Three months after implementation, I conducted a controlled penetration test to validate the IAM controls. The exercise objective was to achieve cluster-level administrative access starting from a compromised developer workstation with legitimate but limited credentials.
@@ -285,13 +295,14 @@ From the compromised workstation, I enumerated accessible resources:
 bash
 
 # Discovery commands executed
+
 curl -k -H "Authorization: PVEAPIToken=..." \
-  https://pve-cluster:8006/api2/json/access/users
+  <https://pve-cluster:8006/api2/json/access/users>
 
 # Response showed only self - good, user enumeration blocked
 
 curl -k -H "Authorization: PVEAPIToken=..." \
-  https://pve-cluster:8006/api2/json/cluster/resources
+  <https://pve-cluster:8006/api2/json/cluster/resources>
 
 # Limited to dev VMs only - proper isolation
 
@@ -308,8 +319,6 @@ Privilege Escalation Attack Path Visualization
 
 ![alt text](pics/5.png)
 
-
-
 The actual exploitation required chaining multiple vulnerabilities:
 
 Step 1: VM Escape (CVE-2023-1234)
@@ -318,6 +327,7 @@ The dev VM ran an outdated kernel. I exploited a known vulnerability to break ou
 python
 
 # Exploit code used (simplified for documentation)
+
 ```
 import os
 import ctypes
@@ -343,7 +353,6 @@ def escape_vm():
     return True
 ```
 
-
 This provided access to the Proxmox host's filesystem, but not Proxmox administrative access due to our role separation.
 
 Step 2: Backup Storage Credential Harvesting
@@ -352,10 +361,13 @@ On the host filesystem, I located NFS mount credentials for backup storage:
 bash
 
 # Found in /etc/fstab on host
+
 192.168.45.10:/backups /mnt/backups nfs4 credentials=/etc/nfs-creds/backup.key 0 0
 
 # The credentials file was readable by the compromised process
+
 cat /etc/nfs-creds/backup.key
+
 # Output revealed service account credentials for backup system
 
 Step 3: Backup Server Compromise
@@ -364,13 +376,16 @@ Using these credentials, I accessed the backup server and found it contained Pro
 bash
 
 # On backup server, found Proxmox backup directory
+
 ls -la /backups/proxmox/configs/
 -rw------- 1 backup backup 4321 Jan 15 03:00 pve01-config-20240115.tar.gz
 -rw------- 1 backup backup 4321 Jan 16 03:00 pve01-config-20240116.tar.gz
 
 # Extracting revealed API tokens
+
 tar xzf pve01-config-20240116.tar.gz ./etc/pve/priv/token.cfg
 cat ./etc/pve/priv/token.cfg
+
 # Found a token with far broader permissions than intended
 
 Step 4: Token Abuse
@@ -395,13 +410,9 @@ The attack succeeded despite our IAM improvements due to:
 
  Attack Timeline and Detection Gaps
 
- 
 ![alt text](pics/6.png)
 
-
-
-
-6. Detection Engineering and Monitoring
+1. Detection Engineering and Monitoring
 6.1 Audit Logging Architecture
 
 Following the red team exercise, I implemented comprehensive audit logging:
@@ -417,27 +428,31 @@ The logging configuration on each Proxmox node:
 bash
 
 # /etc/rsyslog.d/50-proxmox-audit.conf
+
 # Send all audit logs to central collector
+
 $template RemoteServer,"192.168.100.50"
 $template RemotePort,514
 
 # Proxmox specific logs
+
 if $programname == 'pveproxy' then {
-    action(type="omfwd" target="192.168.100.50" port="514" 
+    action(type="omfwd" target="192.168.100.50" port="514"
            protocol="tcp" template="RSYSLOG_SyslogProtocol23Format")
 }
 
 if $programname == 'pvedaemon' then {
-    action(type="omfwd" target="192.168.100.50" port="514" 
+    action(type="omfwd" target="192.168.100.50" port="514"
            protocol="tcp" template="RSYSLOG_SyslogProtocol23Format")
 }
 
 # API access logs (critical for forensics)
+
 if $programname == 'pve-api' then {
-    action(type="omfwd" target="192.168.100.50" port="1514" 
+    action(type="omfwd" target="192.168.100.50" port="1514"
            protocol="tcp" template="RSYSLOG_SyslogProtocol23Format")
     # Also keep local copy with restricted permissions
-    action(type="omfile" file="/var/log/pve-api-audit.log" 
+    action(type="omfile" file="/var/log/pve-api-audit.log"
            createMode="0600")
 }
 
@@ -447,6 +462,7 @@ I developed custom Sigma rules to detect the attack patterns I had used:
 yaml
 
 # Sigma rule: Detects backup credential access attempts
+
 title: Proxmox Backup Credential Access
 id: 2b3c4d5e-6f7g-8h9i-0j1k-2l3m4n5o6p7q
 status: experimental
@@ -458,7 +474,7 @@ logsource:
   category: file_access
 detection:
   selection:
-    path|contains: 
+    path|contains:
       - '/etc/nfs-creds/'
       - '/etc/pve/priv/'
       - '/root/.proxmox/'
@@ -476,12 +492,13 @@ detection:
       - 'backup'  # Exclude backup service
   condition: selection and not filter
 falsepositives:
-  - Legitimate backup operations
-  - Administrative troubleshooting
+
+- Legitimate backup operations
+- Administrative troubleshooting
 level: high
 tags:
-  - attack.credential_access
-  - attack.t1552.001
+- attack.credential_access
+- attack.t1552.001
 
 Detection Rule Coverage Matrix
 
@@ -493,7 +510,6 @@ I implemented automated response actions using Ansible and custom scripts:
 python
 
 # Automated response playbook triggered on critical alerts
-
 
 ```
 #!/usr/bin/env python3
@@ -537,8 +553,7 @@ def isolate_compromised_node(node_name, username):
     return {"status": "isolated", "timestamp": datetime.utcnow().isoformat()}
 ```
 
-
-7. Results and Metrics
+1. Results and Metrics
 7.1 Quantitative Improvements
 Security Metrics Dashboard
 
@@ -571,15 +586,12 @@ These trade-offs were accepted by management as necessary for security improveme
 8.3 Recommendations for Similar Projects
 Implementation Roadmap for IAM Hardening
 
-
 ![alt text](pics/10.0.png)
 
 ![alt text](pics/10.1.png)
 
 ![alt text](pics/10.2.png)
 
-
-9. Conclusion
+1. Conclusion
 
 This project successfully transformed a flat, shared-root administrative model into a least-privilege, MFA-enforced IAM framework across a 47-node Proxmox cluster. The implementation reduced the
-This response is AI-generated, for reference only.
